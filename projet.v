@@ -199,9 +199,9 @@ Definition eval_op o :=
 Fixpoint eval (env:list (string*nat)) e :=
   match e with
     | EInt n => n
-    | EVar v => TODO
-    | EOp o e1 e2 => TODO
-    | ESum v efin ecorps => TODO
+    | EVar v => lookup v env 0
+    | EOp o e1 e2 => eval_op o (eval env e1) (eval env e2)
+    | ESum v efin ecorps => sum (fun i =>eval ((v,i)::env) ecorps) 0 (eval env efin)
   end.
 
 Compute (eval nil test1). (* 385 attendu: n(n+1)(2n+1)/6 pour n=10 *)
@@ -320,11 +320,22 @@ Hint Constructors Steps.
 Lemma Steps_trans code m1 m2 m3 :
  Steps code m1 m2 -> Steps code m2 m3 -> Steps code m1 m3.
 Proof.
-Admitted.
+  intros.
+  induction H.
+  -assumption.
+  -eapply SomeSteps.
+  eassumption.
+  apply IHSteps.
+  easy.
+Qed.
 
 Lemma OneStep code st st' : Step code st st' -> Steps code st st'.
 Proof.
-Admitted.
+  intros.
+  eapply SomeSteps.
+  -eassumption.
+  -apply NoStep.
+Qed.
 
 (** Décalage de pc dans une machine *)
 
@@ -344,12 +355,27 @@ Hint Resolve get_Some.
 Lemma Step_extend code code' m m' :
  Step code m m' -> Step (code++code') m m'.
 Proof.
-Admitted.
-
+  intros.
+  unfold Step in *.
+  destruct (list_get code (pc m)) eqn : Heq.
+  -rewrite get_app_l.
+    +rewrite Heq. easy.
+    +eapply get_Some in Heq. easy.
+  -easy.
+Qed.
+  (* 
+  assert (list_get (@nil instr) (pc m) = None).
+   *)
 Lemma Steps_extend code code' m m' :
  Steps code m m' -> Steps (code++code') m m'.
 Proof.
-Admitted.
+  intros.
+  induction H.
+  -eapply NoStep.
+  -eapply Steps_trans in IHSteps.
+    +eassumption.
+    +eapply OneStep. eapply Step_extend. easy.
+Qed.
 
 Hint Constructors Stepi.
 
@@ -357,19 +383,55 @@ Lemma Stepi_shift instr n m m' :
  Stepi instr m m' ->
  Stepi instr (shift_pc n m) (shift_pc n m').
 Proof.
-Admitted.
+  intros.
+  destruct H.
+  -simpl. rewrite Nat.add_succ_r. eapply SPush.
+  -simpl. rewrite Nat.add_succ_r. eapply SPop.
+  -simpl. rewrite Nat.add_succ_r. eapply SOp.
+  -simpl. rewrite Nat.add_succ_r. eapply SNewVar.
+  -simpl. rewrite Nat.add_succ_r. eapply SDelVar.
+  -simpl. rewrite Nat.add_succ_r. eapply SGetVar. easy.
+  -simpl. rewrite Nat.add_succ_r. eapply SSetVar. easy.
+  -simpl. rewrite Nat.add_sub_assoc.
+    +eapply SJumpYes.
+      *lia.
+      *lia.
+    +lia.
+  -simpl. rewrite Nat.add_succ_r. eapply SJumpNo. lia.
+Qed.
 
 Lemma Step_shift code0 code m m' (n := List.length code0) :
  Step code m m' ->
  Step (code0 ++ code) (shift_pc n m) (shift_pc n m').
 Proof.
-Admitted.
+
+  intros.
+  unfold Step in *.
+  destruct (list_get code (pc m)) eqn : Heq.
+  -rewrite get_app_r'.
+    +rewrite pc_shift. rewrite Nat.add_comm. 
+    rewrite <- Nat.add_sub_assoc.
+      *subst n.
+      rewrite Nat.sub_diag. rewrite Nat.add_0_r.
+      rewrite Heq. eapply Stepi_shift. easy.
+      *lia.
+    +subst n. eapply get_Some in Heq. rewrite pc_shift. lia.
+  -easy.
+Qed.
 
 Lemma Steps_shift code0 code  m m' (n := List.length code0) :
  Steps code m m' ->
  Steps (code0 ++ code) (shift_pc n m) (shift_pc n m').
 Proof.
-Admitted.
+  intros.
+  induction H.
+  -apply NoStep.
+  -eapply Step_shift in H. eapply OneStep in H.
+  eapply Steps_trans in IHSteps.
+    +eassumption.
+    +eassumption.
+Qed.
+
 
 (** Composition d'exécutions complètes *)
 
@@ -378,7 +440,13 @@ Lemma Exec_trans code1 code2 stk1 vars1 stk2 vars2 stk3 vars3 :
  Exec code2 (stk2, vars2) (stk3, vars3) ->
  Exec (code1 ++ code2) (stk1, vars1) (stk3, vars3).
 Proof.
-Admitted.
+  unfold Exec.
+  intros.
+  -eapply Steps_trans.
+    +eapply Steps_extend. eassumption.
+    +eapply Steps_shift in H0. simpl in H0. rewrite Nat.add_0_r in H0.
+    rewrite app_length. eassumption.
+Qed.
 
 
 (** Correction des sauts lors d'une boucle
@@ -411,6 +479,9 @@ Lemma Steps_jump code n (f:nat->nat) stk vars b :
           (Mach 0 (b::stk) (a::acc::vars))
           (Mach (S n) (b::stk) ((S b)::(acc + sum f a N)::vars)).
 Proof.
+  (* intros.
+  eapply Steps_extend. *)
+
 Admitted.
 
 (** Version spécialisée du résultat précédent, avec des
@@ -426,8 +497,14 @@ Lemma Exec_jump code (f:nat->nat) stk vars b :
       (b::stk, 0::0::vars)
       (b::stk, (S b)::(sum f 0 b)::vars).
 Proof.
-Admitted.
-
+  intros.
+  simpl.
+  unfold Exec in  *.
+  eapply Steps_jump with (acc:=0) (N:= b) (a:= 0) in H.
+  -rewrite last_length. eassumption.
+  -easy.
+  -lia.
+Qed.
 
 (** IV) Le compilateur
 
@@ -442,17 +519,16 @@ Admitted.
      - l'environnement de compilation cenv ne contient que les
        variables de boucles.
     Voir également l'invariant EnvsOk ci-dessous. *)
-
 Fixpoint comp (cenv:list string) e :=
   match e with
     | EInt n => Push n :: nil
-    | EVar v => TODO
-    | EOp o e1 e2 => TODO
+    | EVar v => GetVar (index v cenv*2) :: nil
+    | EOp o e1 e2 => (comp cenv e1)++(comp cenv e2) ++ Op o :: nil
     | ESum v efin ecorps =>
-      let prologue := TODO in
-      let corps := TODO in
-      let boucle := corps ++ Jump TODO :: nil in
-      let epilogue := TODO in
+      let prologue :=(comp cenv efin)++NewVar::NewVar::nil in
+      let corps := (comp (v::cenv) ecorps)++GetVar 1:: Op Plus ::SetVar 1:: Push 1::GetVar 0::Op Plus ::SetVar 0 ::nil in
+      let boucle := corps ++ Jump (length corps) :: nil in
+      let epilogue := Pop:: GetVar 1::DelVar :: DelVar :: nil in
       prologue ++ boucle ++ epilogue
   end.
 
@@ -461,8 +537,9 @@ Definition compile e := comp nil e.
 (** Variables libres d'une expression *)
 
 Inductive FV (v:var) : expr -> Prop :=
-| FVVar : FV v (EVar v).
-(* TODO : ajouter les règles manquantes... *)
+| FVVar : FV v (EVar v)
+| FVSum e1 e2 v0: FV v e1 \/ FV v e2 /\  v<>v0 ->FV v (ESum v0 e1 e2)
+| FVOp e1 e2 o: FV v e1 \/ FV v e2 -> FV v (EOp o e1 e2).
 
 Hint Constructors FV.
 
@@ -484,8 +561,17 @@ Lemma EnvsOk_ESum v e1 e2 env cenv vars a b :
   EnvsOk (ESum v e1 e2) env cenv vars ->
   EnvsOk e2 ((v,a)::env) (v::cenv) (a::b::vars).
 Proof.
-Admitted.
-
+  unfold EnvsOk.
+  intros.
+  simpl.
+  destruct (string_dec v0 v).
+  -simpl. split.
+    +rewrite e. left. easy.
+    +easy.
+  -simpl. split. 
+    +right. apply H. apply FVSum. right. easy.
+    +apply H. apply FVSum. right. easy.
+  Qed.
 
 (** Correction du compilateur *)
 
@@ -503,11 +589,49 @@ Theorem comp_ok e env cenv vars stk :
  EnvsOk e env cenv vars ->
  Exec (comp cenv e) (stk,vars) (eval env e :: stk, vars).
 Proof.
-Admitted.
+  revert stk.
+  revert cenv.
+  revert vars.
+  revert env.
+  induction e.
+  -intros. basic_exec.
+  -intros. basic_exec. eapply H. eapply FVVar.
+  -intros.
+  change (comp cenv (EOp o e1 e2)) with ((comp cenv e1)++(comp cenv e2)
+  ++ Op o :: nil). 
+  eapply Exec_trans.
+    +eapply IHe1. unfold EnvsOk in *. auto.
+    +eapply Exec_trans.
+      *eapply IHe2. unfold EnvsOk in *. auto.
+      *basic_exec.
+  -intros.
+  change (comp cenv (ESum v e1 e2)) with (let prologue :=(comp cenv e1)++NewVar::NewVar::nil in
+  let corps := (comp (v::cenv) e2)++ GetVar 1:: Op Plus ::SetVar 1::Push 1::GetVar 0::Op Plus ::SetVar 0 ::nil in
+  let boucle := corps ++ Jump (length corps) :: nil in
+  let epilogue := Pop::GetVar 1::DelVar :: DelVar :: nil in
+  prologue ++ boucle ++ epilogue).
+  eapply Exec_trans.
+    +eapply Exec_trans.
+      *eapply IHe1. auto.
+      *basic_exec.
+    +eapply Exec_trans.
+      *eapply Exec_jump. intros. eapply Exec_trans.
+        **eapply IHe2. eapply EnvsOk_ESum. eassumption.
+        **basic_exec. simpl. rewrite Nat.add_comm. easy.
+      *basic_exec.
+ Qed.
 
 Theorem compile_ok e : Closed e -> Run (compile e) (eval nil e).
 Proof.
-Admitted.
+  unfold Closed.
+  unfold Run.
+  intros.
+  eapply comp_ok.
+  unfold EnvsOk.
+  intros.
+  destruct (H v).
+  easy.
+  Qed.
 
 (** V) Sémantique exécutable
 
